@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import * as satellite from 'satellite.js';
 import { SatelliteRecord } from './satellites';
 
@@ -8,6 +9,7 @@ export class GlobeEngine {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
+  private controls: OrbitControls;
   private earthMesh: THREE.Mesh;
   private pointsMesh: THREE.Points;
   private pointsGeometry: THREE.BufferGeometry;
@@ -43,8 +45,12 @@ export class GlobeEngine {
     });
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.2;
 
     this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x020617);
+
     this.camera = new THREE.PerspectiveCamera(
       45,
       container.clientWidth / container.clientHeight,
@@ -53,17 +59,42 @@ export class GlobeEngine {
     );
     this.camera.position.set(0, 0, 15);
 
-    // Earth Sphere (scaled down 6371km -> 6.371 units)
+    // OrbitControls for mouse drag/zoom
+    this.controls = new OrbitControls(this.camera, this.canvas);
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.08;
+    this.controls.rotateSpeed = 0.6;
+    this.controls.zoomSpeed = 1.2;
+    this.controls.minDistance = 7;
+    this.controls.maxDistance = 40;
+    this.controls.enablePan = false;
+
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+    this.scene.add(ambientLight);
+
+    const sunLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    sunLight.position.set(10, 5, 8);
+    this.scene.add(sunLight);
+
+    const backLight = new THREE.DirectionalLight(0x4488ff, 0.3);
+    backLight.position.set(-10, -5, -8);
+    this.scene.add(backLight);
+
+    // Earth Sphere with Blue Marble texture
     const earthGeo = new THREE.SphereGeometry(6.371, 64, 64);
-    const earthMat = new THREE.MeshBasicMaterial({
-      color: 0x112244,
-      wireframe: true,
+    const textureLoader = new THREE.TextureLoader();
+    const earthTexture = textureLoader.load('/earth-blue-marble.jpg');
+    const earthMat = new THREE.MeshStandardMaterial({
+      map: earthTexture,
+      roughness: 0.85,
+      metalness: 0.05,
     });
     this.earthMesh = new THREE.Mesh(earthGeo, earthMat);
     this.scene.add(this.earthMesh);
 
     // Atmosphere Glow
-    const atmoGeo = new THREE.SphereGeometry(6.5, 64, 64);
+    const atmoGeo = new THREE.SphereGeometry(6.55, 64, 64);
     const atmoMat = new THREE.ShaderMaterial({
       vertexShader: `
         varying vec3 vNormal;
@@ -75,15 +106,31 @@ export class GlobeEngine {
       fragmentShader: `
         varying vec3 vNormal;
         void main() {
-          float intensity = pow(0.6 - dot(vNormal, vec3(0, 0, 1.0)), 2.0);
-          gl_FragColor = vec4(0.3, 0.6, 1.0, 0.2) * intensity;
+          float intensity = pow(0.55 - dot(vNormal, vec3(0, 0, 1.0)), 2.5);
+          gl_FragColor = vec4(0.3, 0.6, 1.0, 0.15) * intensity;
         }
       `,
       blending: THREE.AdditiveBlending,
       side: THREE.BackSide,
       transparent: true,
+      depthWrite: false,
     });
     this.scene.add(new THREE.Mesh(atmoGeo, atmoMat));
+
+    // Stars background
+    const starsGeo = new THREE.BufferGeometry();
+    const starPositions = new Float32Array(2000 * 3);
+    for (let i = 0; i < 2000; i++) {
+      const r = 80 + Math.random() * 120;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      starPositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      starPositions[i * 3 + 2] = r * Math.cos(phi);
+    }
+    starsGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+    const starsMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.3, sizeAttenuation: true });
+    this.scene.add(new THREE.Points(starsGeo, starsMat));
 
     // Points setup
     this.pointsGeometry = new THREE.BufferGeometry();
@@ -342,6 +389,8 @@ export class GlobeEngine {
   private animate(time: number) {
     this.animFrameId = requestAnimationFrame(this.animate);
 
+    this.controls.update();
+
     // Dynamic DPR Management
     if (this.frameTimes.length > 0) {
       const delta = time - this.frameTimes[this.frameTimes.length - 1];
@@ -357,12 +406,12 @@ export class GlobeEngine {
     this.frameTimes.push(time);
     if (this.frameTimes.length > 10) this.frameTimes.shift();
 
-    this.earthMesh.rotation.y += 0.0005;
     this.renderer.render(this.scene, this.camera);
   }
 
   public dispose() {
     if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
+    this.controls.dispose();
     this.renderer.dispose();
   }
 }
